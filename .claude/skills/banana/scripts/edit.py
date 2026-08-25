@@ -24,32 +24,38 @@ OUTPUT_DIR = Path.home() / "Documents" / "nanobanana_generated"
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
-def edit_image(image_path, prompt, model, api_key):
-    """Call Gemini API to edit an image."""
-    image_path = Path(image_path).resolve()
-    if not image_path.exists():
-        print(json.dumps({"error": True, "message": f"Image not found: {image_path}"}))
-        sys.exit(1)
+MIME_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+              ".webp": "image/webp", ".gif": "image/gif"}
 
-    # Read and encode image
-    with open(image_path, "rb") as f:
-        image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    # Determine MIME type
-    suffix = image_path.suffix.lower()
-    mime_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                  ".webp": "image/webp", ".gif": "image/gif"}
-    mime_type = mime_types.get(suffix, "image/png")
+def edit_image(image_paths, prompt, model, api_key):
+    """Call Gemini API to edit an image, optionally with additional reference images.
+
+    image_paths: list of paths. The first is the primary image being edited;
+    any additional paths are supplementary reference images (e.g. a specific
+    piece of furniture to incorporate, or a layout for scale context).
+    """
+    resolved_paths = [Path(p).resolve() for p in image_paths]
+    for p in resolved_paths:
+        if not p.exists():
+            print(json.dumps({"error": True, "message": f"Image not found: {p}"}))
+            sys.exit(1)
+
+    image_parts = []
+    for p in resolved_paths:
+        with open(p, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+        mime_type = MIME_TYPES.get(p.suffix.lower(), "image/png")
+        image_parts.append({"inlineData": {"mimeType": mime_type, "data": image_b64}})
+
+    image_path = resolved_paths[0]
 
     url = f"{API_BASE}/{model}:generateContent?key={api_key}"
 
     body = {
         "contents": [
             {
-                "parts": [
-                    {"text": prompt},
-                    {"inlineData": {"mimeType": mime_type, "data": image_b64}},
-                ]
+                "parts": [{"text": prompt}] + image_parts,
             }
         ],
         "generationConfig": {
@@ -128,13 +134,18 @@ def edit_image(image_path, prompt, model, api_key):
         "path": str(output_path),
         "model": model,
         "source": str(image_path),
+        "reference_images": [str(p) for p in resolved_paths[1:]],
         "text": text_response,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description="Edit images via Gemini REST API")
-    parser.add_argument("--image", required=True, help="Path to input image")
+    parser.add_argument("--image", required=True, action="append",
+                         help="Path to an input image. Repeat to pass multiple: "
+                              "first is the primary image being edited, additional "
+                              "ones are reference images (e.g. a specific furniture "
+                              "piece or a layout for scale context).")
     parser.add_argument("--prompt", required=True, help="Edit instruction")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Model ID (default: {DEFAULT_MODEL})")
     parser.add_argument("--api-key", default=None, help="Google AI API key (or set GOOGLE_AI_API_KEY env)")
@@ -147,7 +158,7 @@ def main():
         sys.exit(1)
 
     result = edit_image(
-        image_path=args.image,
+        image_paths=args.image,
         prompt=args.prompt,
         model=args.model,
         api_key=api_key,
